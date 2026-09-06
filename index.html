@@ -1,0 +1,188 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MIDI Piano Handoff — v0</title>
+<style>
+  body { font-family: system-ui, sans-serif; background:#111; color:#ddd;
+         display:flex; flex-direction:column; align-items:center; gap:1rem; padding:3rem; }
+  button { font-size:1.2rem; padding:.6rem 1.6rem; }
+  #diag { font-size:.9rem; color:#888; white-space:pre; text-align:center; }
+</style>
+</head>
+<body>
+
+<h1>Ode to Joy</h1>
+<button id="start">Start</button>
+<button id="preview" disabled>Hear preview</button>
+<div id="diag">not started</div>
+
+<script>
+// ---------------------------------------------------------------- the song
+// Ode to Joy, first section. C major, 4/4, right hand, monophonic.
+// dur is in beats.  Measures are implied by accumulating 4 beats.
+const Q = 1, H = 2, DQ = 1.5, E = 0.5;
+const C4 = 60, D4 = 62, E4 = 64, F4 = 65, G4 = 67;
+
+const SONG = [
+  [E4,Q],[E4,Q],[F4,Q],[G4,Q],
+  [G4,Q],[F4,Q],[E4,Q],[D4,Q],
+  [C4,Q],[C4,Q],[D4,Q],[E4,Q],
+  [E4,DQ],[D4,E],[D4,H],
+  [E4,Q],[E4,Q],[F4,Q],[G4,Q],
+  [G4,Q],[F4,Q],[E4,Q],[D4,Q],
+  [C4,Q],[C4,Q],[D4,Q],[E4,Q],
+  [D4,DQ],[C4,E],[C4,H],
+].map(([note,dur]) => ({note,dur}));
+
+// Annotate each event with its beat offset inside its own 4/4 measure.
+let t = 0;
+for (const ev of SONG) { ev.beatInBar = t % 4; t += ev.dur; }
+
+const BPM = 80;
+const MS_PER_BEAT = 60000 / BPM;
+const MAX_LEVEL = 4;
+
+// Level N => player owns every note starting in the first N beats of its bar.
+const isPlayerNote = (ev, level) => ev.beatInBar < level;
+
+// ---------------------------------------------------------------- sound
+let midiOut = null;
+let audioCtx = null;
+
+function beep(note, ms) {
+  audioCtx = audioCtx || new AudioContext();
+  const hz = 440 * Math.pow(2, (note - 69) / 12);
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const now = audioCtx.currentTime;
+  osc.type = 'triangle';
+  osc.frequency.value = hz;
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.3, now + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + ms / 1000);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(now);
+  osc.stop(now + ms / 1000 + 0.05);
+}
+
+function playNote(note, ms) {
+  beep(note, ms);                               // computer speakers
+  if (midiOut) {                                // and the piano, when it can voice it
+    midiOut.send([0x90, note, 100]);
+    midiOut.send([0x80, note, 0], performance.now() + ms);
+  }
+}
+
+// ---------------------------------------------------------------- game
+let level = 1;
+let index = 0;
+let waitingFor = null;   // MIDI note number the player must press, or null
+
+const diag = document.getElementById('diag');
+const previewBtn = document.getElementById('preview');
+function status(extra) {
+  diag.textContent =
+    `Level ${level} / ${MAX_LEVEL}\n` +
+    `MIDI in: ${midiInName || 'NONE -- nothing can advance the song'}\n` +
+    `MIDI out: ${midiOut ? midiOut.name : 'none (using Web Audio)'}` +
+    (extra ? `\n${extra}` : '');
+  previewBtn.disabled = (waitingFor === null);
+}
+
+function env() {
+  return `protocol: ${location.protocol}  secure context: ${window.isSecureContext}`;
+}
+
+function step() {
+  if (index >= SONG.length) {                  // level complete
+    if (level === MAX_LEVEL) { status('done -- you played the whole melody'); return; }
+    level++;
+    index = 0;
+    status('level complete');
+    setTimeout(step, 1500);                    // brief pause, then same song again
+    return;
+  }
+
+  const ev = SONG[index];
+  const ms = ev.dur * MS_PER_BEAT;
+
+  if (isPlayerNote(ev, level)) {
+    waitingFor = ev.note;                      // musical time stops here
+    status();
+    return;
+  }
+
+  playNote(ev.note, ms);
+  index++;
+  setTimeout(step, ms);
+}
+
+function onNoteOn(note) {
+  // With a MIDI output the piano voices the key itself. Without one we must
+  // voice every press ourselves -- wrong notes included, they are the mechanic.
+  if (!midiOut) beep(note, 250);
+
+  if (waitingFor === null) return;             // computer's turn
+  if (note !== waitingFor) return;             // wrong note sounded, stay stopped
+
+  const ev = SONG[index];
+  waitingFor = null;
+  index++;
+  status();
+  setTimeout(step, ev.dur * MS_PER_BEAT);      // note keeps its written duration
+}
+
+// Play the note the game is waiting for, without accepting it.
+// Progression is untouched: we stay stopped until the player finds the key.
+function preview() {
+  if (waitingFor === null) return;
+  playNote(waitingFor, SONG[index].dur * MS_PER_BEAT);
+}
+
+// ---------------------------------------------------------------- MIDI
+let midiInName = null;
+
+async function start() {
+  document.getElementById('start').disabled = true;
+  audioCtx = audioCtx || new AudioContext();     // must happen on a user gesture
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+
+  if (!navigator.requestMIDIAccess) {
+    diag.textContent = 'This browser exposes no Web MIDI API.\n' + env() +
+      '\nUse Chrome or Edge, served over http://localhost/';
+    return;
+  }
+
+  let midi;
+  try {
+    midi = await navigator.requestMIDIAccess({ sysex: false });
+  } catch (e) {                                  // permission denied, or blocked origin
+    diag.textContent = `MIDI access refused: ${e.name} -- ${e.message}\n` + env();
+    return;
+  }
+
+  bindDevices(midi);
+  midi.onstatechange = () => { bindDevices(midi); status(); };  // plugged in later
+  status(`${midi.inputs.size} input(s), ${midi.outputs.size} output(s) visible\n` + env());
+  setTimeout(step, 1000);
+}
+
+function bindDevices(midi) {
+  const input = midi.inputs.values().next().value;
+  const output = midi.outputs.values().next().value;
+  if (input) {
+    midiInName = input.name;
+    input.onmidimessage = (m) => {
+      const [cmd, note, vel] = m.data;
+      if ((cmd & 0xf0) === 0x90 && vel > 0) onNoteOn(note);
+    };
+  }
+  midiOut = output || null;
+}
+
+document.getElementById('start').addEventListener('click', start);
+previewBtn.addEventListener('click', preview);
+</script>
+</body>
+</html>
