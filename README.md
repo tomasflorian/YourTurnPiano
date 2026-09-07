@@ -1,5 +1,7 @@
 # YourTurnPiano
 
+![YourTurnPiano screenshot](screenshots/screenshot.png)
+
 ## Learn the song before you realize you're learning it
 
 YourTurnPiano turns piano practice into a handoff between automatic
