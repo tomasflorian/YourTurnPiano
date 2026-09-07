@@ -1,8 +1,8 @@
-# YourTurnPiano
+# First Note Piano
 
 ## Learn the song before you realize you're learning it
 
-YourTurnPiano turns piano practice into a handoff between automatic
+First Note Piano turns piano practice into a handoff between automatic
 movement and conscious attention.
 
 The computer plays most of the song, then pauses at selected notes. You find
@@ -30,7 +30,7 @@ automatic skill.
 You don't have to force yourself to master the whole keyboard. You just have to
 take your turn.
 
-![YourTurnPiano screenshot](screenshots/screenshot.png)
+![First Note Piano screenshot](screenshots/screenshot.png)
 
 
 ### Name alternatives
