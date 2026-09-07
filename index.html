@@ -2,29 +2,147 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>MIDI Piano Handoff — v0</title>
+<title>YourTurnPiano</title>
 <style>
   body { font-family: system-ui, sans-serif; background:#111; color:#ddd;
-         display:flex; flex-direction:column; align-items:center; gap:1rem; padding:3rem; }
-  button { font-size:1.2rem; padding:.6rem 1.6rem; }
+         display:flex; flex-direction:column; align-items:center; gap:1rem; margin:0; padding:3rem 0; }
+  button { font-size:.85rem; padding:.35rem .75rem; }
+  .note-actions { display:flex; flex-wrap:wrap; justify-content:center; gap:.5rem; }
+  .tempo-control { display:flex; align-items:center; gap:.6rem; }
+  #tempo { width: min(45vw, 240px); }
   #diag { font-size:.9rem; color:#888; white-space:pre; text-align:center; }
+  #midiLog { font-size:.85rem; color:#6c6; font-family:monospace; }
+  #mistakeResult {
+    position: fixed; top: 1rem; right: 1rem; z-index: 10;
+    padding: .65rem 1rem; background: #242424; color: #fff;
+    border: 1px solid #555; border-radius: 6px; font-size: .95rem;
+    display: none;
+  }
+  .note-stats { position: absolute; top: 15px; left: 0; width: 100%; height: 8px; pointer-events: none; }
+  .session-mistake-dot { display: block; width: 6px; height: 6px; margin: 0 auto 1px; border-radius: 50%; background: #f04444; visibility: hidden; }
+  .all-time-bar { display: flex; height: 3px; margin: 0 3px; border-radius: 2px; overflow: hidden; background: #555; visibility: hidden; }
+  .all-time-bar .bar-correct { background: #35c759; }
+  .all-time-bar .bar-wrong { background: #ed4141; }
+  .stats-help { font-size: .75rem; color: #bbb; max-width: 420px; }
+
+  /* ---- note roll: a piano-roll timeline of the current level ---- */
+  #roll {
+    width: 90vw;
+    box-sizing: border-box;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: #1a1a19;
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 6px;
+  }
+  #rollTrack { position: relative; }
+  .measure-number {
+    position: absolute;
+    top: 4px;
+    font-size: 12px;
+    color: #aaa;
+    pointer-events: none;
+  }
+  .bar-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: rgba(255,255,255,0.3);
+    pointer-events: none;
+  }
+  .note-block {
+    position: absolute;
+    z-index: 1;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    --note-fill: .8;
+    background: rgb(56 56 53 / var(--note-fill));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.22);
+    transition: background-color .15s, box-shadow .15s;
+    white-space: nowrap;
+  }
+  .note-block.player-note { background: rgb(57 135 229 / var(--note-fill)); }
+  .note-letter { color: #fff; font-size: 14px; font-weight: 700; }
+  .note-octave { font-size: .7em; opacity: .55; }
+  .note-block:hover { --note-fill: 1; }
+  .note-block:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  #rollHint { font-size: .8rem; color: #aaa; margin: 0; }
+  .note-block.past        { --note-fill: .65; }
+  .note-block.current     { --note-fill: 1;
+    box-shadow: 0 0 0 2px #fab219, 0 0 8px #fab219; }       /* amber = now */
+  #rollLegend { font-size: .75rem; color: #898781; display:flex; gap:1rem; }
+  #rollLegend .swatch { display:inline-block; width:10px; height:10px; border-radius:2px;
+    margin-right:.35em; vertical-align:middle; }
 </style>
 </head>
 <body>
+<div id="mistakeResult" hidden>
+  <div id="statsSummary" role="status"></div>
+  <p class="stats-help">A red dot marks a key with an incorrect press this attempt. The red/green bar below grows with all-time attempts (log scale, about 30 attempts fills it). Hover for exact counts. Restart song or press A0 to play again.</p>
+  <p id="statsStorageMessage" class="stats-help"></p>
+</div>
 
-<h1>Ode to Joy</h1>
+<h1 id="songTitle">Ode to Joy</h1>
+<label>Song:
+  <select id="songSelect">
+    <option value="odeToJoy">Ode to Joy</option>
+    <option value="twinkle">Twinkle, Twinkle, Little Star</option>
+    <option value="twinkleTwoHands">Twinkle — two hands (easy left hand)</option>
+    <option value="odeToJoyTwoHands">Ode to Joy — two hands (moving left hand)</option>
+  </select>
+</label>
 <button id="start">Start</button>
-<button id="preview" disabled>Hear preview</button>
+<button id="restart" disabled>Restart song</button>
+<label class="tempo-control" for="tempo">Tempo
+  <input id="tempo" type="range" min="40" max="160" step="5" value="80" aria-describedby="tempoValue">
+  <output id="tempoValue" for="tempo">80 BPM</output>
+</label>
+<label>Level:
+  <select id="levelSelect">
+    <option value="1">1</option>
+    <option value="2">2</option>
+    <option value="3">3</option>
+    <option value="4">4</option>
+  </select>
+</label>
+<div class="note-actions">
+  <button id="allManual" type="button">All manual</button>
+  <button id="allAutomatic" type="button">All automatic</button>
+  <button id="resetLevel" type="button">Reset this level to defaults</button>
+  <button id="resetStats" type="button">Reset stats</button>
+</div>
+
+<div id="roll"><div id="rollTrack"></div></div>
+<button id="returnToCursor" type="button">Return to current note</button>
+<div id="rollLegend">
+  <span><span class="swatch" style="background:#3987e5"></span>you</span>
+  <span><span class="swatch" style="background:#383835"></span>computer</span>
+  <span><span class="swatch" style="background:#fab219"></span>current</span>
+  <span id="manualCompletion" role="status"></span>
+</div>
+
+<p id="rollHint" role="status">Click a note to toggle automatic playback. Changes are saved per level in this browser.</p>
 <div id="diag">not started</div>
+<div id="midiLog">no MIDI received yet</div>
 
 <script>
 // ---------------------------------------------------------------- the song
-// Ode to Joy, first section. C major, 4/4, right hand, monophonic.
-// dur is in beats.  Measures are implied by accumulating 4 beats.
+// C major arrangements in 4/4. dur and start are measured in beats.
 const Q = 1, H = 2, DQ = 1.5, E = 0.5;
-const C4 = 60, D4 = 62, E4 = 64, F4 = 65, G4 = 67;
+const BEATS_PER_BAR = 4;
+const C4 = 60, D4 = 62, E4 = 64, F4 = 65, G4 = 67, A4 = 69;
 
-const SONG = [
+const SONGS = {
+  odeToJoy: { title: 'Ode to Joy', notes: [
   [E4,Q],[E4,Q],[F4,Q],[G4,Q],
   [G4,Q],[F4,Q],[E4,Q],[D4,Q],
   [C4,Q],[C4,Q],[D4,Q],[E4,Q],
@@ -33,18 +151,273 @@ const SONG = [
   [G4,Q],[F4,Q],[E4,Q],[D4,Q],
   [C4,Q],[C4,Q],[D4,Q],[E4,Q],
   [D4,DQ],[C4,E],[C4,H],
-].map(([note,dur]) => ({note,dur}));
+  ] },
+  twinkle: { title: 'Twinkle, Twinkle, Little Star', notes: [
+    [C4,Q],[C4,Q],[G4,Q],[G4,Q],
+    [A4,Q],[A4,Q],[G4,H],
+    [F4,Q],[F4,Q],[E4,Q],[E4,Q],
+    [D4,Q],[D4,Q],[C4,H],
+    [G4,Q],[G4,Q],[F4,Q],[F4,Q],
+    [E4,Q],[E4,Q],[D4,H],
+    [G4,Q],[G4,Q],[F4,Q],[F4,Q],
+    [E4,Q],[E4,Q],[D4,H],
+    [C4,Q],[C4,Q],[G4,Q],[G4,Q],
+    [A4,Q],[A4,Q],[G4,H],
+    [F4,Q],[F4,Q],[E4,Q],[E4,Q],
+    [D4,Q],[D4,Q],[C4,H],
+  ] },
+};
 
-// Annotate each event with its beat offset inside its own 4/4 measure.
-let t = 0;
-for (const ev of SONG) { ev.beatInBar = t % 4; t += ev.dur; }
+// Annotate each event with its beat offset inside its own 4/4 measure, and
+// its absolute start beat from the top of the song (for the note roll).
+for (const song of Object.values(SONGS)) {
+  let t = 0;
+  song.notes = song.notes.map(([note, dur]) => {
+    const ev = { note, dur, start: t, beatInBar: t % BEATS_PER_BAR, hand: 'right' };
+    t += dur;
+    return ev;
+  });
+  song.beats = t;
+}
+// An introductory two-hand arrangement: a C3 drone once per measure.
+// Explicit start times allow either hand to sustain notes under the other.
+SONGS.twinkleTwoHands = {
+  title: 'Twinkle — two hands',
+  beats: SONGS.twinkle.beats,
+  notes: [
+    ...SONGS.twinkle.notes.map(ev => ({ ...ev })),
+    ...Array.from({ length: SONGS.twinkle.beats / BEATS_PER_BAR }, (_, bar) => ({
+      note: 48, dur: BEATS_PER_BAR, start: bar * BEATS_PER_BAR,
+      beatInBar: 0, hand: 'left',
+    })),
+  ].sort((a, b) => a.start - b.start || a.note - b.note),
+};
+// Next step: familiar melody with one bass note per bar, moving between C3/G3.
+SONGS.odeToJoyTwoHands = {
+  title: 'Ode to Joy — two hands',
+  beats: SONGS.odeToJoy.beats,
+  notes: [
+    ...SONGS.odeToJoy.notes.map(ev => ({ ...ev })),
+    ...[48, 55, 48, 55, 48, 55, 48, 48].map((note, bar) => ({
+      note, dur: BEATS_PER_BAR, start: bar * BEATS_PER_BAR,
+      beatInBar: 0, hand: 'left',
+    })),
+  ].sort((a, b) => a.start - b.start || a.note - b.note),
+};
+for (const song of Object.values(SONGS)) {
+  song.groups = [];
+  song.notes.forEach((ev, i) => {
+    let group = song.groups[song.groups.length - 1];
+    if (!group || group.start !== ev.start) {
+      group = { start: ev.start, notes: [] };
+      song.groups.push(group);
+    }
+    group.notes.push(i);
+  });
+}
+const songSelect = document.getElementById('songSelect');
+let songId = Object.hasOwn(SONGS, songSelect.value) ? songSelect.value : 'odeToJoy';
+songSelect.value = songId;
+document.getElementById('songTitle').textContent = SONGS[songId].title;
+let SONG = SONGS[songId].notes;
+let GROUPS = SONGS[songId].groups;
 
-const BPM = 80;
-const MS_PER_BEAT = 60000 / BPM;
+let MS_PER_BEAT = 60000 / 80;
+const tempoSlider = document.getElementById('tempo');
+function updateTempo() {
+  const bpm = Number(tempoSlider.value);
+  MS_PER_BEAT = 60000 / bpm;
+  document.getElementById('tempoValue').textContent = `${bpm} BPM`;
+  tempoSlider.setAttribute('aria-valuetext', `${bpm} beats per minute`);
+}
+tempoSlider.value = '80';
+updateTempo();
+// Apply to subsequent notes and count-in clicks without restarting playback.
+tempoSlider.addEventListener('input', updateTempo);
+window.addEventListener('pageshow', updateTempo);
 const MAX_LEVEL = 4;
 
-// Level N => player owns every note starting in the first N beats of its bar.
-const isPlayerNote = (ev, level) => ev.beatInBar < level;
+// Start with each level's default pattern, then restore saved note ownership.
+let PATTERN_KEY;
+let playerPatterns;
+const patternCache = new Map();
+const rollHint = document.getElementById('rollHint');
+function loadPatterns() {
+  PATTERN_KEY = `yourTurnKeyboard.${songId}.notePatterns.v1`;
+  rollHint.textContent = 'Click a note to toggle automatic playback. Changes are saved per song and level in this browser.';
+  if (patternCache.has(songId)) {
+    playerPatterns = patternCache.get(songId);
+    return;
+  }
+  playerPatterns = Array.from({ length: MAX_LEVEL }, (_, i) =>
+  SONG.map(ev => ev.beatInBar < i + 1));
+try {
+  const saved = JSON.parse(localStorage.getItem(PATTERN_KEY));
+  if (Array.isArray(saved)) {
+    playerPatterns.forEach((pattern, i) => {
+      if (Array.isArray(saved[i]) && saved[i].length === SONG.length &&
+          saved[i].every(value => typeof value === 'boolean')) {
+        playerPatterns[i] = saved[i];
+      }
+    });
+  }
+} catch {
+  rollHint.textContent = 'Click a note to toggle automatic playback. Saved settings could not be loaded.';
+}
+  patternCache.set(songId, playerPatterns);
+}
+loadPatterns();
+const isPlayerNote = (ev, level) => playerPatterns[level - 1][SONG.indexOf(ev)];
+
+function toggleNote(noteIndex) {
+  playerPatterns[level - 1][noteIndex] = !playerPatterns[level - 1][noteIndex];
+  saveAndApplyPattern();
+}
+
+function resetLevelPattern() {
+  playerPatterns[level - 1] = SONG.map(ev => ev.beatInBar < level);
+  saveAndApplyPattern();
+}
+
+function setAllManual(manual) {
+  playerPatterns[level - 1].fill(manual);
+  saveAndApplyPattern();
+}
+
+function saveAndApplyPattern() {
+  followCursor = false;
+  // Stop any smooth scroll already in progress while the user edits.
+  const roll = document.getElementById('roll');
+  roll.scrollTo({ left: roll.scrollLeft, behavior: 'instant' });
+  try {
+    localStorage.setItem(PATTERN_KEY, JSON.stringify(playerPatterns));
+    rollHint.textContent = 'Click a note to toggle automatic playback. Changes are saved per song and level in this browser.';
+  } catch {
+    rollHint.textContent = 'Pattern changed for this session, but browser storage is unavailable; changes will not survive a reload.';
+  }
+  renderRoll(false);
+  // Reconcile every unplayed note at the current onset after ownership edits.
+  if (waitingFor !== null) {
+    clearTimeout(pendingTimer);
+    step();
+  }
+}
+
+// MIDI note number -> name, e.g. 60 -> "C4" (matches the C4=60 etc. above).
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const noteName = (n) => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
+
+// ---------------------------------------------------------------- note roll
+// A scrolling piano-roll view of the whole level: notes already played,
+// the one just played, and everything still to come. Built per song -- only
+// which class each block wears changes as the game progresses.
+const PX_PER_BEAT = 44;
+const PX_PER_SEMITONE = 10;
+const rollTrack = document.getElementById('rollTrack');
+let rollEls = [];
+let noteStatsEls = [];
+let reviewMode = false;
+let followCursor = true;
+function buildRoll() {
+rollTrack.replaceChildren();
+noteStatsEls = [];
+const beatWidth = PX_PER_BEAT;
+const SONG_BEATS = SONGS[songId].beats;
+const pitches = SONG.map(ev => ev.note);
+const MIN_PITCH = Math.min(...pitches);
+const MAX_PITCH = Math.max(...pitches);
+
+rollTrack.style.height = ((MAX_PITCH - MIN_PITCH) * PX_PER_SEMITONE + 58) + 'px';
+rollTrack.style.width = (SONG_BEATS * beatWidth) + 'px';
+
+// Measure boundaries share the notes' beat scale and scroll with the song.
+for (let beat = 0; beat <= SONG_BEATS; beat += BEATS_PER_BAR) {
+  const line = document.createElement('div');
+  line.className = 'bar-line';
+  line.setAttribute('aria-hidden', 'true');
+  if (beat === SONG_BEATS) {
+    line.style.right = '0'; // Keep the closing line inside the track.
+  } else {
+    line.style.left = (beat * beatWidth) + 'px';
+  }
+  rollTrack.appendChild(line);
+  if (beat < SONG_BEATS) {
+    const label = document.createElement('span');
+    label.className = 'measure-number';
+    label.style.left = (beat * beatWidth + 5) + 'px';
+    label.textContent = String(beat / BEATS_PER_BAR + 1);
+    label.setAttribute('aria-label', `Measure ${label.textContent}`);
+    rollTrack.appendChild(label);
+  }
+}
+
+rollEls = SONG.map((ev, i) => {
+  const el = document.createElement('button');
+  el.type = 'button';
+  el.className = 'note-block';
+  el.style.left = (ev.start * beatWidth) + 'px';
+  el.style.width = (ev.dur * beatWidth - 3) + 'px';
+  el.style.bottom = ((ev.note - MIN_PITCH) * PX_PER_SEMITONE + 8) + 'px';
+  const name = document.createElement('span');
+  name.className = 'note-letter';
+  name.textContent = NOTE_NAMES[ev.note % 12];
+  const octave = document.createElement('span');
+  octave.className = 'note-octave';
+  octave.textContent = String(Math.floor(ev.note / 12) - 1);
+  el.appendChild(name);
+  el.appendChild(octave);
+  if (reviewMode) {
+    const overlay = document.createElement('span');
+    overlay.className = 'note-stats';
+    const dot = document.createElement('span');
+    dot.className = 'session-mistake-dot';
+    const bar = document.createElement('span');
+    bar.className = 'all-time-bar';
+    const correctBar = document.createElement('span');
+    correctBar.className = 'bar-correct';
+    const wrongBar = document.createElement('span');
+    wrongBar.className = 'bar-wrong';
+    bar.appendChild(correctBar);
+    bar.appendChild(wrongBar);
+    overlay.appendChild(dot);
+    overlay.appendChild(bar);
+    el.appendChild(overlay);
+    noteStatsEls[i] = { dot, bar, correctBar, wrongBar };
+  }
+  el.addEventListener('click', () => toggleNote(i));
+  rollTrack.appendChild(el);
+  return el;
+});
+}
+buildRoll();
+
+// Repaint which notes are past/current/future and whose they are, then
+// scroll the current one into view. "current" = the note most recently
+// actually played (by us or by the player), including both hands at that beat.
+function renderRoll(scroll = true) {
+  const manualNotes = playerPatterns[level - 1].filter(Boolean).length;
+  const manualPercent = Math.round(manualNotes / SONG.length * 100);
+  document.getElementById('manualCompletion').textContent =
+    `Manual: ${manualPercent}% (${manualNotes}/${SONG.length} notes blue)`;
+  SONG.forEach((ev, i) => {
+    const el = rollEls[i];
+    const played = playedNotes.has(i);
+    el.classList.toggle('past', played && ev.start !== lastPlayedBeat);
+    el.classList.toggle('current', !reviewMode && played && ev.start === lastPlayedBeat);
+    el.classList.toggle('future', !played);
+    el.classList.toggle('player-note', isPlayerNote(ev, level));
+    const automatic = !isPlayerNote(ev, level);
+    el.setAttribute('aria-pressed', String(automatic));
+    el.setAttribute('aria-label', `Note ${i + 1}, ${ev.hand} hand, ${noteName(ev.note)}: automatic playback`);
+    el.title = `${ev.hand} hand, ${noteName(ev.note)}: ${automatic ? 'computer plays' : 'you play'}. Click to switch.`;
+  });
+  if (reviewMode) renderStats();
+  if (scroll && followCursor && playedIndex >= 0) {
+    rollEls[playedIndex].scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  } else if (scroll && followCursor) {
+    document.getElementById('roll').scrollTo({ left: 0, behavior: 'instant' });
+  }
+}
 
 // ---------------------------------------------------------------- sound
 let midiOut = null;
@@ -76,18 +449,120 @@ function playNote(note, ms) {
 
 // ---------------------------------------------------------------- game
 let level = 1;
-let index = 0;
-let waitingFor = null;   // MIDI note number the player must press, or null
+let index = 0;         // Current group of notes sharing a start beat.
+let playedIndex = -1;  // index of the note most recently actually played,
+                        // by us or by the player -- what the roll highlights
+                        // as "current". -1 = nothing played yet.
+const playedNotes = new Set();
+let lastPlayedBeat = -1;
+let waitingFor = null;   // Set of remaining manual note indices, or null.
+let mistakeCount = 0;
+const mistakeResult = document.getElementById('mistakeResult');
+const STATS_KEY = 'yourTurnKeyboard.noteStats.v2';
+let sessionStats = {};
+let lastSessionStats = {};
+let allTimeStats = {};
+let statsStorageMessage = '';
+try {
+  const saved = JSON.parse(localStorage.getItem(STATS_KEY));
+  if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+    for (const [key, counts] of Object.entries(saved)) {
+      if (/^[^:]+:\d+$/.test(key) && counts &&
+          Number.isSafeInteger(counts.correct) && counts.correct >= 0 &&
+          Number.isSafeInteger(counts.wrong) && counts.wrong >= 0) {
+        allTimeStats[key] = { correct: counts.correct, wrong: counts.wrong };
+      }
+    }
+  }
+} catch {
+  statsStorageMessage = 'Saved statistics could not be loaded.';
+}
+
+function saveStats() {
+  try {
+    localStorage.setItem(STATS_KEY, JSON.stringify(allTimeStats));
+    statsStorageMessage = '';
+  } catch {
+    statsStorageMessage = 'Statistics are available for this visit, but could not be saved in this browser.';
+  }
+}
+
+function recordExpected(noteIndices, correct) {
+  for (const noteIndex of noteIndices) {
+    const key = `${songId}:${noteIndex}`;
+  for (const stats of [sessionStats, allTimeStats]) {
+    const counts = stats[key] || (stats[key] = { correct: 0, wrong: 0 });
+    counts[correct ? 'correct' : 'wrong']++;
+  }
+  }
+  saveStats();
+}
+
+function renderStats() {
+  const mistakes = Object.values(lastSessionStats).reduce((sum, counts) => sum + counts.wrong, 0);
+  document.getElementById('statsSummary').textContent =
+    `Completed — ${mistakes} wrong key ${mistakes === 1 ? 'press' : 'presses'}`;
+  SONG.forEach((ev, i) => {
+    if (!noteStatsEls[i]) return;
+    const visuals = noteStatsEls[i];
+    const key = `${songId}:${i}`;
+    const attempt = lastSessionStats[key] || { correct: 0, wrong: 0 };
+    const allTime = allTimeStats[key] || { correct: 0, wrong: 0 };
+    const allTotal = allTime.correct + allTime.wrong;
+    const barSize = allTotal ? Math.max(8, Math.min(100, Math.log2(allTotal + 1) / Math.log2(31) * 100)) : 0;
+    visuals.dot.style.visibility = attempt.wrong ? 'visible' : 'hidden';
+    visuals.bar.style.visibility = allTotal ? 'visible' : 'hidden';
+    visuals.bar.style.width = `${barSize}%`;
+    visuals.correctBar.style.width = allTotal ? `${allTime.correct / allTotal * 100}%` : '0%';
+    visuals.wrongBar.style.width = allTotal ? `${allTime.wrong / allTotal * 100}%` : '0%';
+    visuals.dot.title = `${attempt.correct} correct, ${attempt.wrong} wrong this attempt for note ${i + 1} (${noteName(ev.note)})`;
+    visuals.bar.title = `${allTime.correct} correct, ${allTime.wrong} wrong all time for note ${i + 1} (${noteName(ev.note)})`;
+  });
+  document.getElementById('statsStorageMessage').textContent = statsStorageMessage;
+}
+
+function clearStats() {
+  allTimeStats = {};
+  sessionStats = {};
+  lastSessionStats = {};
+  mistakeCount = 0;
+  saveStats();
+  if (!mistakeResult.hidden) {
+    renderStats();
+    document.getElementById('statsSummary').textContent = 'Statistics reset';
+  }
+}
+
+function resetMistakes() {
+  mistakeCount = 0;
+  sessionStats = {};
+  mistakeResult.hidden = true;
+  if (reviewMode) {
+    reviewMode = false;
+    buildRoll();
+  }
+}
+let pendingTimer = null; // in-flight setTimeout id for the next step(), if any
+
+function schedule(fn, ms) {
+  clearTimeout(pendingTimer);
+  pendingTimer = setTimeout(fn, ms);
+}
 
 const diag = document.getElementById('diag');
-const previewBtn = document.getElementById('preview');
+const restartBtn = document.getElementById('restart');
+const levelSelect = document.getElementById('levelSelect');
+const midiLog = document.getElementById('midiLog');
 function status(extra) {
+  const audioLocked = audioCtx && audioCtx.state === 'suspended';
   diag.textContent =
     `Level ${level} / ${MAX_LEVEL}\n` +
     `MIDI in: ${midiInName || 'NONE -- nothing can advance the song'}\n` +
-    `MIDI out: ${midiOut ? midiOut.name : 'none (using Web Audio)'}` +
+    `MIDI out: ${midiOut ? midiOut.name : 'none (using Web Audio)'}\n` +
+    `Audio: ${audioLocked ? 'LOCKED -- click or tap anywhere on this page once to enable sound' : 'ready'}` +
     (extra ? `\n${extra}` : '');
-  previewBtn.disabled = (waitingFor === null);
+  levelSelect.value = level;                 // keep the dropdown in sync with auto-advance
+  renderRoll();
 }
 
 function env() {
@@ -95,49 +570,116 @@ function env() {
 }
 
 function step() {
-  if (index >= SONG.length) {                  // level complete
-    if (level === MAX_LEVEL) { status('done -- you played the whole melody'); return; }
-    level++;
-    index = 0;
-    status('level complete');
-    setTimeout(step, 1500);                    // brief pause, then same song again
+  if (reviewMode) return;
+  if (index >= GROUPS.length) {                // Review until an explicit restart.
+    lastSessionStats = sessionStats;
+    sessionStats = {};
+    reviewMode = true;
+    buildRoll();
+    mistakeResult.hidden = true; // Stats are shown on the note blocks themselves.
+    mistakeCount = 0;
+    followCursor = false;
+    clearTimeout(pendingTimer);
+    pendingTimer = null;
+    waitingFor = null;
+    status('song complete — restart when ready');
+    document.getElementById('roll').scrollTo({ left: 0, behavior: 'instant' });
     return;
   }
 
-  const ev = SONG[index];
-  const ms = ev.dur * MS_PER_BEAT;
-
-  if (isPlayerNote(ev, level)) {
-    waitingFor = ev.note;                      // musical time stops here
+  const group = GROUPS[index];
+  const remaining = group.notes.filter(i => !playedNotes.has(i));
+  waitingFor = new Set(remaining.filter(i => isPlayerNote(SONG[i], level)));
+  if (waitingFor.size) {
     status();
     return;
   }
-
-  playNote(ev.note, ms);
+  waitingFor = null;
+  for (const i of remaining) {
+    playNote(SONG[i].note, SONG[i].dur * MS_PER_BEAT);
+    markPlayed(i);
+  }
+  const nextBeat = GROUPS[index + 1]?.start ?? SONGS[songId].beats;
+  const ms = (nextBeat - group.start) * MS_PER_BEAT;
   index++;
-  setTimeout(step, ms);
+  armNextOrSchedule(ms);
 }
 
-function onNoteOn(note) {
-  // With a MIDI output the piano voices the key itself. Without one we must
-  // voice every press ourselves -- wrong notes included, they are the mechanic.
-  if (!midiOut) beep(note, 250);
+function markPlayed(i) {
+  mistakeResult.hidden = true;
+  followCursor = true;
+  playedNotes.add(i);
+  playedIndex = i;
+  lastPlayedBeat = SONG[i].start;
+}
+
+// Called right after a note has been triggered (by us or by the player).
+// Don't make the *next* note wait for this one to finish sounding before it
+// can be played -- if it's the player's, arm it immediately; the previous
+// note's remaining duration is just how long it rings out, not a gate on
+// input.
+function armNextOrSchedule(ms) {
+  if (index < GROUPS.length && GROUPS[index].notes.some(i => isPlayerNote(SONG[i], level))) {
+    step();
+  } else {
+    status();
+    schedule(step, ms);
+  }
+}
+
+// A short metronome count-in, at tempo, so there's an audible cue leading
+// up to the first note instead of silence. `then` runs once it's done.
+const COUNT_IN_BEATS = 1;                    // one click before playback
+
+function countIn(beatsLeft, then) {
+  if (beatsLeft <= 0) { then(); return; }
+  beep(84, 60);                              // short high click, distinct from the song
+  schedule(() => countIn(beatsLeft - 1, then), MS_PER_BEAT);
+}
+
+// Back to the top of the song at the current level, discarding progress.
+function restart() {
+  resetMistakes();
+  followCursor = true;
+  clearTimeout(pendingTimer);
+  waitingFor = null;
+  index = 0;
+  playedIndex = -1;
+  playedNotes.clear();
+  lastPlayedBeat = -1;
+  status('restarted');
+  countIn(COUNT_IN_BEATS, step);
+}
+
+const RESTART_NOTE = 21;   // A0, the bottom key of an 88-key piano -- below
+                            // the song's range (C4-G4), so it never collides
+
+function onNoteOn(note, vel) {
+  // Log every press as it arrives, right or wrong, before any early return --
+  // this is the live feed for debugging what the hardware actually sends.
+  midiLog.textContent = `note ${note} (${noteName(note)})  vel ${vel}`;
+
+  if (note === RESTART_NOTE) { restart(); return; }  // hardware restart key
+
+  // Always voice the player's own press ourselves -- wrong notes included,
+  // they are the mechanic. A MIDI output being present doesn't mean the
+  // piano is sounding the physical key locally, so we can't skip this.
+  // Use the duration of the note currently due, so the beep isn't clipped
+  // short of its written length.
+  const matching = waitingFor === null ? [] : [...waitingFor].filter(i => SONG[i].note === note);
+  const dur = (matching.length ? Math.max(...matching.map(i => SONG[i].dur)) : Q) * MS_PER_BEAT;
+  beep(note, dur);
 
   if (waitingFor === null) return;             // computer's turn
-  if (note !== waitingFor) return;             // wrong note sounded, stay stopped
-
-  const ev = SONG[index];
-  waitingFor = null;
-  index++;
-  status();
-  setTimeout(step, ev.dur * MS_PER_BEAT);      // note keeps its written duration
-}
-
-// Play the note the game is waiting for, without accepting it.
-// Progression is untouched: we stay stopped until the player finds the key.
-function preview() {
-  if (waitingFor === null) return;
-  playNote(waitingFor, SONG[index].dur * MS_PER_BEAT);
+  mistakeResult.hidden = true;
+  if (matching.length) recordExpected(matching, true);
+  else recordExpected([...waitingFor], false);
+  if (!matching.length) {
+    mistakeCount++;                            // Pitch only; no timing penalty.
+    return;
+  }
+  matching.forEach(markPlayed);
+  step();                                    // wait for the other hand, or continue
 }
 
 // ---------------------------------------------------------------- MIDI
@@ -165,7 +707,9 @@ async function start() {
   bindDevices(midi);
   midi.onstatechange = () => { bindDevices(midi); status(); };  // plugged in later
   status(`${midi.inputs.size} input(s), ${midi.outputs.size} output(s) visible\n` + env());
-  setTimeout(step, 1000);
+  restartBtn.disabled = false;
+  levelSelect.disabled = false;
+  countIn(COUNT_IN_BEATS, step);
 }
 
 function bindDevices(midi) {
@@ -175,14 +719,54 @@ function bindDevices(midi) {
     midiInName = input.name;
     input.onmidimessage = (m) => {
       const [cmd, note, vel] = m.data;
-      if ((cmd & 0xf0) === 0x90 && vel > 0) onNoteOn(note);
+      if ((cmd & 0xf0) === 0x90 && vel > 0) onNoteOn(note, vel);
     };
   }
   midiOut = output || null;
 }
 
 document.getElementById('start').addEventListener('click', start);
-previewBtn.addEventListener('click', preview);
+document.getElementById('resetLevel').addEventListener('click', resetLevelPattern);
+document.getElementById('resetStats').addEventListener('click', clearStats);
+document.getElementById('allManual').addEventListener('click', () => setAllManual(true));
+document.getElementById('allAutomatic').addEventListener('click', () => setAllManual(false));
+document.getElementById('returnToCursor').addEventListener('click', () => {
+  followCursor = true;
+  renderRoll();
+});
+function syncSelectedSong() {
+  if (!Object.hasOwn(SONGS, songSelect.value) || songSelect.value === songId) return;
+  const wasReview = reviewMode;
+  resetMistakes();
+  followCursor = true;
+  clearTimeout(pendingTimer);
+  pendingTimer = null;
+  waitingFor = null;
+  index = 0;
+  playedIndex = -1;
+  playedNotes.clear();
+  lastPlayedBeat = -1;
+  songId = songSelect.value;
+  SONG = SONGS[songId].notes;
+  GROUPS = SONGS[songId].groups;
+  document.getElementById('songTitle').textContent = SONGS[songId].title;
+  loadPatterns();
+  buildRoll();
+  if (restartBtn.disabled || wasReview) renderRoll();
+  else restart();
+}
+songSelect.addEventListener('change', syncSelectedSong);
+// Browsers can restore form selections after the initial script has run.
+window.addEventListener('pageshow', syncSelectedSong);
+restartBtn.addEventListener('click', restart);
+levelSelect.addEventListener('change', () => {
+  level = Number(levelSelect.value);
+  if (reviewMode) renderRoll(false);
+  else if (restartBtn.disabled) renderRoll(false);
+  else restart();                          // jump to the chosen level, from its top
+});
+
+renderRoll();                              // paint the initial state before Start is pressed
 </script>
 </body>
 </html>
