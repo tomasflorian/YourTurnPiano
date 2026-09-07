@@ -1,7 +1,5 @@
 # YourTurnPiano
 
-![YourTurnPiano screenshot](screenshots/screenshot.png)
-
 ## Learn the song before you realize you're learning it
 
 YourTurnPiano turns piano practice into a handoff between automatic
@@ -32,13 +30,10 @@ automatic skill.
 You don't have to force yourself to master the whole keyboard. You just have to
 take your turn.
 
-### Name alternatives
+![YourTurnPiano screenshot](screenshots/screenshot.png)
 
-1. **Take Your Turn**
-2. **Handoff Piano**
-3. **The Piano Handoff**
-4. **Learn by Listening**
-5. **Automatic Hands**
+
+### Name alternatives
 
     python -m http.server 8000
 
